@@ -49,6 +49,39 @@ PCB* ready_queue_pop_head() {
     return temp;
 }
 
+
+// 1.2.3: Remove and return the PCB with the shortest job time from the queue
+PCB* ready_queue_pop_shortest() {
+    if (head == NULL) return NULL;
+
+    PCB *prev = NULL;
+    PCB *curr = head;
+    PCB *min_prev = NULL;
+    PCB *min_node = head;
+
+    while (curr != NULL) {
+        if (curr->job_time < min_node->job_time) {
+            min_node = curr;
+            min_prev = prev;
+        }
+        prev = curr;
+        curr = curr->next;
+    }
+
+    if (min_prev == NULL) {
+        head = min_node->next;
+    } else {
+        min_prev->next = min_node->next;
+    }
+
+    if (tail == min_node) {
+        tail = min_prev;
+    }
+
+    min_node->next = NULL;
+    return min_node;
+}
+
 // print queue for debugging
 void ready_queue_print() {
     PCB *curr = head;

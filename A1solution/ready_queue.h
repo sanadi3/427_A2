@@ -6,6 +6,7 @@
 void ready_queue_add_to_tail(PCB *p);
 void ready_queue_add_to_head(PCB *p); // Helper for some policies
 PCB* ready_queue_pop_head();
+PCB* ready_queue_pop_shortest(); // Helper for SJF policy
 void ready_queue_print(); // Helper for debugging
 
 #endif
