@@ -22,6 +22,9 @@
 
 #include "shellmemory.h"
 #include "shell.h"
+#include "pcb.h"
+#include "ready_queue.h"
+#include "scheduler.h"
 
 int badcommand() {
     printf("Unknown Command\n");
@@ -355,28 +358,42 @@ int cd(char *path) {
 }
 
 int source(char *script) {
-    int errCode = 0;
     char line[MAX_USER_INPUT];
     FILE *p = fopen(script, "rt");      // the program is in a file
+    int script_start = -1;
+    int script_end = -1;
 
     if (p == NULL) {
         return badcommandFileDoesNotExist();
     }
 
-    fgets(line, MAX_USER_INPUT - 1, p);
-    while (1) {
-        errCode = parseInput(line);     // which calls interpreter()
-        memset(line, 0, sizeof(line));
-
-        if (feof(p)) {
-            break;
+    while (fgets(line, MAX_USER_INPUT - 1, p) != NULL) {
+        int idx = mem_load_script_line(line);
+        if (idx < 0) {
+            fclose(p);
+            if (script_start >= 0) {
+                mem_cleanup_script(script_start, script_end);
+            }
+            return 1;
         }
-        fgets(line, MAX_USER_INPUT - 1, p);
+        if (script_start < 0) script_start = idx;
+        script_end = idx;
     }
 
     fclose(p);
 
-    return errCode;
+    if (script_start < 0) {
+        return 0;
+    }
+
+    PCB *process = make_pcb(script_start, script_end);
+    if (process == NULL) {
+        mem_cleanup_script(script_start, script_end);
+        return 1;
+    }
+
+    ready_queue_add_to_tail(process);
+    return scheduler_run_fcfs();
 }
 
 int run(char *args[], int arg_size) {

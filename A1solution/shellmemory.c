@@ -38,6 +38,9 @@ void mem_cleanup_script(int start, int end) {
             shell_code[i].line = NULL;
         }
     }
+    while (code_idx > 0 && shell_code[code_idx - 1].line == NULL) {
+        code_idx--;
+    }
 }
 
 // Helper functions
@@ -55,12 +58,14 @@ int match(char *model, char *var) {
 
 // Shell memory functions
 
-void mem_init() {
+void mem_init(void) {
     int i;
     for (i = 0; i < MEM_SIZE; i++) {
         shellmemory[i].var = "none";
         shellmemory[i].value = "none";
+        shell_code[i].line = NULL;
     }
+    code_idx = 0;
 }
 
 // Set key value pair
