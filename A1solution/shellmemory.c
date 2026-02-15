@@ -10,6 +10,36 @@ struct memory_struct {
 
 struct memory_struct shellmemory[MEM_SIZE];
 
+// For script storage
+struct code_struct{
+    char *line;
+};
+struct code_struct shell_code[MEM_SIZE];
+
+int code_idx = 0;
+
+int mem_load_script_line(char *line) {
+    if (code_idx < MEM_SIZE) {
+        shell_code[code_idx].line = strdup(line);
+        return code_idx++; // Return current index and increment
+    }
+    return -1; // Out of memory
+}
+
+char *mem_get_line(int index) {
+    if (index >= 0 && index < 1000) return shell_code[index].line;
+    return NULL;
+}
+
+void mem_cleanup_script(int start, int end) {
+    for (int i = start; i <= end && i < MEM_SIZE; i++) {
+        if (shell_code[i].line != NULL) {
+            free(shell_code[i].line);
+            shell_code[i].line = NULL;
+        }
+    }
+}
+
 // Helper functions
 int match(char *model, char *var) {
     int i, len = strlen(var), matchCount = 0;
