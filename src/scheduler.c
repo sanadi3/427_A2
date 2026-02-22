@@ -72,18 +72,38 @@ static int scheduler_run_rr(void) {
     return last_error;
 }
 
-static void scheduler_cleanup_ready_queue(void) {
+// 1.2.4: AGING uses 1-instruction slices and a score-sorted ready queue.
+static int scheduler_run_aging(void) {
+    int last_error = 0;
     PCB *current = NULL;
+    const int aging_quantum = 1;
 
     while ((current = ready_queue_pop_head()) != NULL) {
-        mem_cleanup_script(current->start, current->end);
-        free(current);
+        last_error = run_process_slice(current, aging_quantum, last_error);
+
+        if (current->pc > current->end) {
+            mem_cleanup_script(current->start, current->end);
+            free(current);
+            continue;
+        }
+
+        // Age only jobs that waited in the ready queue during this time slice.
+        ready_queue_age_all();
+
+        // Continue current process when it remains lowest/tied-lowest; otherwise promote lower scores.
+        PCB *next = ready_queue_peek_head();
+        if (next == NULL || next->job_length_score >= current->job_length_score) {
+            ready_queue_add_to_head(current);
+        } else {
+            ready_queue_insert_sorted(current);
+        }
     }
+
+    return last_error;
 }
 
 int scheduler_run(SchedulePolicy policy) {
-    // A2 1.2.2: scheduler policy dispatch.
-    // FCFS/SJF/RR execute normally; AGING is a placeholder for now.
+    // A2 1.2.2+1.2.3+1.2.4: scheduler policy dispatch.
     switch (policy) {
     case POLICY_FCFS:
         return scheduler_run_fcfs();
@@ -92,11 +112,7 @@ int scheduler_run(SchedulePolicy policy) {
     case POLICY_RR:
         return scheduler_run_rr();
     case POLICY_AGING:
-        // A2 1.2.2: Since code/PCBs are already loaded through the shared path,
-        // clean up queued processes for unimplemented policies to keep state clean.
-        scheduler_cleanup_ready_queue();
-        printf("Scheduling policy not implemented\n");
-        return 1;
+        return scheduler_run_aging();
     default:
         return 1;
     }
