@@ -13,7 +13,7 @@ static int g_force_first_pid_once = -1;
 /*
  * 1.2.5 background-mode fix (for T_background):
  * Before this, SJF could pick a shorter user program before the batch-script process.
- * Assignment says batch script must run first once, no matter the policy.
+ * Assignment says batch script must run first once.
  * So we keep one "forced first PID" and pop that process first exactly one time.
  * After that, scheduling goes back to normal FCFS/SJF/RR/RR30/AGING behavior.
  */
