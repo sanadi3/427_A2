@@ -281,7 +281,11 @@ int load_and_schedule_programs(char *scripts[], int script_count, SchedulePolicy
     }
 
     for (int i = 0; i < script_count; i++) {
-        ready_queue_add_to_tail(pcbs[i]);
+        if (policy == POLICY_AGING) {
+            ready_queue_insert_sorted(pcbs[i]);
+        } else {
+            ready_queue_add_to_tail(pcbs[i]);
+        }
     }
 
     return scheduler_run(policy);
