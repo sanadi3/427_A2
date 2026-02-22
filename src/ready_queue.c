@@ -49,6 +49,49 @@ PCB* ready_queue_pop_head() {
     return temp;
 }
 
+void ready_queue_insert_sorted(PCB *p) {
+    if (!p) return;
+    p->next = NULL;
+
+    if (head == NULL) {
+        head = p;
+        tail = p;
+        return;
+    }
+
+    // Stable insertion: equal-score jobs stay in existing queue order.
+    if (p->job_length_score < head->job_length_score) {
+        p->next = head;
+        head = p;
+        return;
+    }
+
+    PCB *curr = head;
+    while (curr->next != NULL && curr->next->job_length_score <= p->job_length_score) {
+        curr = curr->next;
+    }
+
+    p->next = curr->next;
+    curr->next = p;
+    if (p->next == NULL) {
+        tail = p;
+    }
+}
+
+void ready_queue_age_all(void) {
+    PCB *curr = head;
+    while (curr != NULL) {
+        if (curr->job_length_score > 0) {
+            curr->job_length_score--;
+        }
+        curr = curr->next;
+    }
+}
+
+PCB* ready_queue_peek_head(void) {
+    return head;
+}
+
 
 // 1.2.3: Remove and return the PCB with the shortest job time from the queue
 PCB* ready_queue_pop_shortest() {
