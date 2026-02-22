@@ -14,7 +14,8 @@ PCB* make_pcb(int start, int end) {
     new_pcb->start = start;
     new_pcb->end = end;
     new_pcb->pc = start; // Initialize program counter to the start of the job
-    new_pcb->job_time = (end - start+1); // Initialize job time to 0
+    new_pcb->job_time = (end - start+1); // Initialize job time to number of instructions
+    new_pcb->job_length_score = new_pcb->job_time; // initialize score for aging policy
     new_pcb->next = NULL; // Initialize next pointer to NULL
     return new_pcb;
 }
