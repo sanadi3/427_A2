@@ -192,7 +192,7 @@ int badcommandExecLoad() {
 }
 
 int parse_policy(char *policy_text, SchedulePolicy *out_policy) {
-    // A2 1.2.2: Parse user policy tokens exactly as specified by the assignment.
+    // 1.2.2 parse exec POLICY token (FCFS/SJF/RR/AGING)
     if (strcmp(policy_text, "FCFS") == 0) {
         *out_policy = POLICY_FCFS;
         return 0;
@@ -213,8 +213,8 @@ int parse_policy(char *policy_text, SchedulePolicy *out_policy) {
 }
 
 int load_and_schedule_programs(char *scripts[], int script_count, SchedulePolicy policy, int print_exec_load_error) {
-    // A2 1.2.2: Shared load/validation path used by both source and exec.
-    // This keeps code loading, PCB creation, and queue setup policy-agnostic.
+    // 1.2.1 + 1.2.2 core path:
+    // load full scripts -> create PCBs -> enqueue -> scheduler
     int starts[3];
     int ends[3];
     PCB *pcbs[3] = { NULL, NULL, NULL };
@@ -228,6 +228,7 @@ int load_and_schedule_programs(char *scripts[], int script_count, SchedulePolicy
     for (int i = 0; i < script_count; i++) {
         FILE *p = fopen(scripts[i], "rt");
         if (p == NULL) {
+            // 1.2.2 load failure => no program should run
             for (int j = 0; j < i; j++) {
                 mem_cleanup_script(starts[j], ends[j]);
             }
@@ -240,6 +241,7 @@ int load_and_schedule_programs(char *scripts[], int script_count, SchedulePolicy
         while (fgets(line, MAX_USER_INPUT - 1, p) != NULL) {
             int idx = mem_load_script_line(line);
             if (idx < 0) {
+                // 1.2.2 atomic failure behavior
                 fclose(p);
                 if (starts[i] >= 0) {
                     mem_cleanup_script(starts[i], ends[i]);
@@ -282,8 +284,10 @@ int load_and_schedule_programs(char *scripts[], int script_count, SchedulePolicy
 
     for (int i = 0; i < script_count; i++) {
         if (policy == POLICY_AGING) {
+            // 1.2.4 AGING starts with score-sorted queue
             ready_queue_insert_sorted(pcbs[i]);
         } else {
+            // 1.2.1/.2/.3 FCFS/SJF/RR initial enqueue order
             ready_queue_add_to_tail(pcbs[i]);
         }
     }
@@ -491,8 +495,7 @@ int cd(char *path) {
 }
 
 int source(char *script) {
-    // A2 1.2.1 + 1.2.2: source runs through the same process loader/scheduler path
-    // as exec with one program and FCFS.
+    // 1.2.1 source now runs as a process through scheduler path
     FILE *p = fopen(script, "rt");
     char *scripts[1];
 
@@ -506,7 +509,7 @@ int source(char *script) {
 }
 
 int exec_cmd(char *args[], int arg_size) {
-    // A2 1.2.2: exec supports 1..3 programs, with POLICY as the last token.
+    // 1.2.2 exec command handler
     int script_count = arg_size - 1;
     char *policy_text = args[arg_size - 1];
     SchedulePolicy policy;
@@ -527,8 +530,7 @@ int exec_cmd(char *args[], int arg_size) {
         }
     }
 
-    // A2 1.2.2: All policies share one load/validation path.
-    // Unimplemented policies are handled in scheduler_run().
+    // 1.2.2/.3/.4 single gateway to load+schedule for all policies
     return load_and_schedule_programs(args, script_count, policy, 1);
 }
 

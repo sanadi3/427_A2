@@ -5,9 +5,9 @@ typedef struct PCB {
     int pid;
     int start;
     int end;
-    int pc; // Program Counter
-    int job_time; // Total time required for the job
-    int job_length_score; // Score used for AGING policy
+    int pc; // 1.2.1 Program Counter
+    int job_time; // 1.2.3 estimated length (line count)
+    int job_length_score; // 1.2.4 AGING score
     struct PCB *next; // Pointer to the next PCB in the queue
 } PCB;
 
