@@ -5,7 +5,7 @@
 PCB *head = NULL;
 PCB *tail = NULL;
 
-// Add a PCB to the end of the queue
+// 1.2.1/1.2.2 FCFS path uses tail enqueue
 void ready_queue_add_to_tail(PCB *p) {
     if (!p) return;
     p->next = NULL;
@@ -19,7 +19,7 @@ void ready_queue_add_to_tail(PCB *p) {
     }
 }
 
-// Add a PCB to the front of the queue
+// 1.2.4 AGING can keep current process running by putting it back at head
 void ready_queue_add_to_head(PCB *p) {
     if (!p) return;
 
@@ -33,7 +33,7 @@ void ready_queue_add_to_head(PCB *p) {
     }
 }
 
-// Remove and return the PCB at the head of the queue 
+// shared dequeue for FCFS/RR/AGING
 PCB* ready_queue_pop_head() {
     if (head == NULL) return NULL;
 
@@ -50,6 +50,7 @@ PCB* ready_queue_pop_head() {
 }
 
 void ready_queue_insert_sorted(PCB *p) {
+    // 1.2.4: keep AGING queue ordered by score (low score first)
     if (!p) return;
     p->next = NULL;
 
@@ -59,7 +60,7 @@ void ready_queue_insert_sorted(PCB *p) {
         return;
     }
 
-    // Stable insertion: equal-score jobs stay in existing queue order.
+    // 1.2.4 tie behavior: stable for equal scores
     if (p->job_length_score < head->job_length_score) {
         p->next = head;
         head = p;
@@ -79,6 +80,7 @@ void ready_queue_insert_sorted(PCB *p) {
 }
 
 void ready_queue_age_all(void) {
+    // 1.2.4 aging step: waiting jobs only, score-- floor at 0
     PCB *curr = head;
     while (curr != NULL) {
         if (curr->job_length_score > 0) {
@@ -89,11 +91,12 @@ void ready_queue_age_all(void) {
 }
 
 PCB* ready_queue_peek_head(void) {
+    // 1.2.4 check whether current still lowest/tied-lowest
     return head;
 }
 
 
-// 1.2.3: Remove and return the PCB with the shortest job time from the queue
+// 1.2.3 SJF: pick lowest job_time
 PCB* ready_queue_pop_shortest() {
     if (head == NULL) return NULL;
 

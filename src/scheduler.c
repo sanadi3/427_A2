@@ -6,7 +6,7 @@
 #include "ready_queue.h"
 #include "shell.h"
 
-// 1.2.3: Helper function to run a process for a given number of instructions (or until completion)
+// 1.2.3 helper. also reused by 1.2.4 aging loop
 static int run_process_slice(PCB *current, int max_instructions, int last_error) {
     int executed = 0;
 
@@ -24,6 +24,7 @@ static int run_process_slice(PCB *current, int max_instructions, int last_error)
 }
 
 static int scheduler_run_fcfs(void) {
+    // 1.2.1 base scheduler behavior. 1.2.2 exec FCFS also lands here
     int last_error = 0;
     PCB *current = NULL;
 
@@ -72,7 +73,7 @@ static int scheduler_run_rr(void) {
     return last_error;
 }
 
-// 1.2.4: AGING uses 1-instruction slices and a score-sorted ready queue.
+// 1.2.4: AGING policy
 static int scheduler_run_aging(void) {
     int last_error = 0;
     PCB *current = NULL;
@@ -87,10 +88,10 @@ static int scheduler_run_aging(void) {
             continue;
         }
 
-        // Age only jobs that waited in the ready queue during this time slice.
+        // 1.2.4 exact rule: age waiting jobs, not the one that just ran
         ready_queue_age_all();
 
-        // Continue current process when it remains lowest/tied-lowest; otherwise promote lower scores.
+        // if current still lowest/tied-lowest, keep running. else reinsert sorted and promote
         PCB *next = ready_queue_peek_head();
         if (next == NULL || next->job_length_score >= current->job_length_score) {
             ready_queue_add_to_head(current);
@@ -103,7 +104,7 @@ static int scheduler_run_aging(void) {
 }
 
 int scheduler_run(SchedulePolicy policy) {
-    // A2 1.2.2+1.2.3+1.2.4: scheduler policy dispatch.
+    // 1.2.2 policy dispatch entrypoint used by exec/source path
     switch (policy) {
     case POLICY_FCFS:
         return scheduler_run_fcfs();
