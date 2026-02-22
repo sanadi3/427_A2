@@ -57,8 +57,15 @@ int my_mkdir(char *name);
 int touch(char *path);
 int cd(char *path);
 int source(char *script);
+int exec_cmd(char *args[], int arg_size);
 int run(char *args[], int args_size);
 int badcommandFileDoesNotExist();
+int badcommandExec();
+int badcommandExecPolicy();
+int badcommandExecDuplicate();
+int badcommandExecLoad();
+int parse_policy(char *policy_text, SchedulePolicy *out_policy);
+int load_and_schedule_programs(char *scripts[], int script_count, SchedulePolicy policy, int print_exec_load_error);
 
 // Interpret commands and their arguments
 int interpreter(char *command_args[], int args_size) {
@@ -141,6 +148,11 @@ int interpreter(char *command_args[], int args_size) {
             return badcommand();
         return run(&command_args[1], args_size - 1);
 
+    } else if (strcmp(command_args[0], "exec") == 0) {
+        if (args_size < 3 || args_size > 5)
+            return badcommandExec();
+        return exec_cmd(&command_args[1], args_size - 1);
+
     } else
         return badcommand();
 }
@@ -153,9 +165,130 @@ help			Displays all the commands\n \
 quit			Exits / terminates the shell with “Bye!”\n \
 set VAR STRING		Assigns a value to shell memory\n \
 print VAR		Displays the STRING assigned to VAR\n \
-source SCRIPT.TXT		Executes the file SCRIPT.TXT\n ";
+source SCRIPT.TXT		Executes the file SCRIPT.TXT\n \
+exec p1 [p2] [p3] POLICY	Executes up to 3 programs\n ";
     printf("%s\n", help_string);
     return 0;
+}
+
+int badcommandExec() {
+    printf("Bad command: exec\n");
+    return 1;
+}
+
+int badcommandExecPolicy() {
+    printf("Bad command: exec policy\n");
+    return 1;
+}
+
+int badcommandExecDuplicate() {
+    printf("Bad command: exec duplicate program\n");
+    return 1;
+}
+
+int badcommandExecLoad() {
+    printf("Bad command: exec load\n");
+    return 1;
+}
+
+int parse_policy(char *policy_text, SchedulePolicy *out_policy) {
+    // A2 1.2.2: Parse user policy tokens exactly as specified by the assignment.
+    if (strcmp(policy_text, "FCFS") == 0) {
+        *out_policy = POLICY_FCFS;
+        return 0;
+    }
+    if (strcmp(policy_text, "SJF") == 0) {
+        *out_policy = POLICY_SJF;
+        return 0;
+    }
+    if (strcmp(policy_text, "RR") == 0) {
+        *out_policy = POLICY_RR;
+        return 0;
+    }
+    if (strcmp(policy_text, "AGING") == 0) {
+        *out_policy = POLICY_AGING;
+        return 0;
+    }
+    return 1;
+}
+
+int load_and_schedule_programs(char *scripts[], int script_count, SchedulePolicy policy, int print_exec_load_error) {
+    // A2 1.2.2: Shared load/validation path used by both source and exec.
+    // This keeps code loading, PCB creation, and queue setup policy-agnostic.
+    int starts[3];
+    int ends[3];
+    PCB *pcbs[3] = { NULL, NULL, NULL };
+    char line[MAX_USER_INPUT];
+
+    for (int i = 0; i < script_count; i++) {
+        starts[i] = -1;
+        ends[i] = -1;
+    }
+
+    for (int i = 0; i < script_count; i++) {
+        FILE *p = fopen(scripts[i], "rt");
+        if (p == NULL) {
+            for (int j = 0; j < i; j++) {
+                mem_cleanup_script(starts[j], ends[j]);
+            }
+            if (print_exec_load_error) {
+                return badcommandExecLoad();
+            }
+            return 1;
+        }
+
+        while (fgets(line, MAX_USER_INPUT - 1, p) != NULL) {
+            int idx = mem_load_script_line(line);
+            if (idx < 0) {
+                fclose(p);
+                if (starts[i] >= 0) {
+                    mem_cleanup_script(starts[i], ends[i]);
+                }
+                for (int j = 0; j < i; j++) {
+                    mem_cleanup_script(starts[j], ends[j]);
+                }
+                if (print_exec_load_error) {
+                    return badcommandExecLoad();
+                }
+                return 1;
+            }
+            if (starts[i] < 0) starts[i] = idx;
+            ends[i] = idx;
+        }
+
+        fclose(p);
+
+        if (starts[i] < 0) {
+            starts[i] = 0;
+            ends[i] = -1;
+        }
+    }
+
+    for (int i = 0; i < script_count; i++) {
+        pcbs[i] = make_pcb(starts[i], ends[i]);
+        if (pcbs[i] == NULL) {
+            for (int j = 0; j < i; j++) {
+                free(pcbs[j]);
+            }
+            for (int j = 0; j < script_count; j++) {
+                mem_cleanup_script(starts[j], ends[j]);
+            }
+            if (print_exec_load_error) {
+                return badcommandExecLoad();
+            }
+            return 1;
+        }
+    }
+
+    for (int i = 0; i < script_count; i++) {
+        if (policy == POLICY_AGING) {
+            ready_queue_insert_sorted(pcbs[i]);
+        } else {
+            ready_queue_add_to_tail(pcbs[i]);
+        }
+    }
+
+    return scheduler_run(policy);
 }
 
 int quit() {
@@ -358,42 +491,45 @@ int cd(char *path) {
 }
 
 int source(char *script) {
-    char line[MAX_USER_INPUT];
-    FILE *p = fopen(script, "rt");      // the program is in a file
-    int script_start = -1;
-    int script_end = -1;
+    // A2 1.2.1 + 1.2.2: source runs through the same process loader/scheduler path
+    // as exec with one program and FCFS.
+    FILE *p = fopen(script, "rt");
+    char *scripts[1];
 
     if (p == NULL) {
         return badcommandFileDoesNotExist();
     }
-
-    while (fgets(line, MAX_USER_INPUT - 1, p) != NULL) {
-        int idx = mem_load_script_line(line);
-        if (idx < 0) {
-            fclose(p);
-            if (script_start >= 0) {
-                mem_cleanup_script(script_start, script_end);
-            }
-            return 1;
-        }
-        if (script_start < 0) script_start = idx;
-        script_end = idx;
-    }
-
     fclose(p);
 
-    if (script_start < 0) {
-        return 0;
+    scripts[0] = script;
+    return load_and_schedule_programs(scripts, 1, POLICY_FCFS, 0);
+}
+
+int exec_cmd(char *args[], int arg_size) {
+    // A2 1.2.2: exec supports 1..3 programs, with POLICY as the last token.
+    int script_count = arg_size - 1;
+    char *policy_text = args[arg_size - 1];
+    SchedulePolicy policy;
+
+    if (script_count < 1 || script_count > 3) {
+        return badcommandExec();
     }
 
-    PCB *process = make_pcb(script_start, script_end);
-    if (process == NULL) {
-        mem_cleanup_script(script_start, script_end);
-        return 1;
+    if (parse_policy(policy_text, &policy) != 0) {
+        return badcommandExecPolicy();
     }
 
-    ready_queue_add_to_tail(process);
-    return scheduler_run_fcfs();
+    for (int i = 0; i < script_count; i++) {
+        for (int j = i + 1; j < script_count; j++) {
+            if (strcmp(args[i], args[j]) == 0) {
+                return badcommandExecDuplicate();
+            }
+        }
+    }
+
+    // A2 1.2.2: All policies share one load/validation path.
+    // Unimplemented policies are handled in scheduler_run().
+    return load_and_schedule_programs(args, script_count, policy, 1);
 }
 
 int run(char *args[], int arg_size) {
