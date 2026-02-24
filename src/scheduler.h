@@ -13,5 +13,12 @@ int scheduler_run(SchedulePolicy policy);
 int scheduler_is_active(void);
 SchedulePolicy scheduler_get_current_policy(void);
 void scheduler_set_first_process_pid(int pid);
+void scheduler_set_multithreaded(int enabled);
+int scheduler_is_multithreaded(void);
+int scheduler_is_worker_thread(void);
+void scheduler_join_workers(void);
+void scheduler_ready_queue_lock(void);
+void scheduler_ready_queue_unlock(void);
+void scheduler_ready_queue_signal(void);
 
 #endif

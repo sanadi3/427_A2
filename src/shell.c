@@ -5,6 +5,7 @@
 #include <unistd.h>             // isatty
 #include "shell.h"
 #include "interpreter.h"
+#include "scheduler.h"
 #include "shellmemory.h"
 
 int parseInput(char ui[]);
@@ -38,6 +39,7 @@ int main(int argc, char *argv[]) {
             exit(99);           // ignore all other errors
 
         if (feof(stdin)) {
+            scheduler_join_workers();
             return 0;
         }
 

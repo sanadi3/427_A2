@@ -1,8 +1,6 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <pthread.h>
-#include <unistd.h>
-#include <errno.h>
 
 #include "scheduler.h"
 #include "shellmemory.h"
@@ -19,6 +17,9 @@ static pthread_t worker_threads[2];
 static pthread_mutex_t rq_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t rq_cond = PTHREAD_COND_INITIALIZER;
 static int scheduler_quit = 0;
+static int mt_workers_started = 0;
+static int mt_active_workers = 0;
+static int mt_time_slice = 30;
 
 /*
  * 1.2.5 background-mode fix (for T_background):
@@ -50,6 +51,9 @@ static int run_process_slice(PCB *current, int max_instructions, int last_error)
         char *line = mem_get_line(current->pc);
         if (line != NULL) {
             last_error = parseInput(line);
+            if (last_error == -2) {
+                break;
+            }
         }
         current->pc++;
         executed++;
@@ -142,40 +146,60 @@ static int scheduler_run_aging(void) {
 }
 
 static int scheduler_run_mt_rr(int time_slice) {
-    static int slice_arg[2];
-    slice_arg[0] = time_slice;
-    slice_arg[1] = time_slice;
-    scheduler_quit = 0;
-    pthread_create(&worker_threads[0], NULL, scheduler_worker_thread, &slice_arg[0]);
-    pthread_create(&worker_threads[1], NULL, scheduler_worker_thread, &slice_arg[1]);
-    // Wait for all jobs to finish
-    while (1) {
-        pthread_mutex_lock(&rq_mutex);
-        int empty = (ready_queue_peek_head() == NULL);
+    int rc0 = 0, rc1 = 0;
+
+    mt_time_slice = time_slice;
+
+    pthread_mutex_lock(&rq_mutex);
+    if (!mt_workers_started) {
+        scheduler_quit = 0;
+        mt_active_workers = 0;
+        mt_workers_started = 1;
         pthread_mutex_unlock(&rq_mutex);
-        if (empty) break;
-        usleep(10000); // sleep 10ms
+
+        rc0 = pthread_create(&worker_threads[0], NULL, scheduler_worker_thread, NULL);
+        rc1 = pthread_create(&worker_threads[1], NULL, scheduler_worker_thread, NULL);
+
+        if (rc0 != 0 || rc1 != 0) {
+            if (rc0 == 0) {
+                pthread_cancel(worker_threads[0]);
+                pthread_join(worker_threads[0], NULL);
+            }
+            if (rc1 == 0) {
+                pthread_cancel(worker_threads[1]);
+                pthread_join(worker_threads[1], NULL);
+            }
+            pthread_mutex_lock(&rq_mutex);
+            mt_workers_started = 0;
+            scheduler_quit = 0;
+            pthread_mutex_unlock(&rq_mutex);
+            g_scheduler_active = 0;
+            return 1;
+        }
+    } else {
+        pthread_mutex_unlock(&rq_mutex);
     }
-    scheduler_quit = 1;
+
+    pthread_mutex_lock(&rq_mutex);
     pthread_cond_broadcast(&rq_cond);
-    pthread_join(worker_threads[0], NULL);
-    pthread_join(worker_threads[1], NULL);
+    pthread_mutex_unlock(&rq_mutex);
     return 0;
 }
 
 int scheduler_run(SchedulePolicy policy) {
     int rc = 1;
 
-    if (mt_enabled && (policy == POLICY_RR || policy == POLICY_RR30)) {
-        int slice = (policy == POLICY_RR) ? 2 : 30;
-        return scheduler_run_mt_rr(slice);
-    }
     // 1.2.5: avoid nested scheduler loops
     if (g_scheduler_active) {
         return 1;
     }
     g_scheduler_active = 1;
     g_current_policy = policy;
+
+    if (mt_enabled && (policy == POLICY_RR || policy == POLICY_RR30)) {
+        int slice = (policy == POLICY_RR) ? 2 : 30;
+        return scheduler_run_mt_rr(slice);
+    }
 
     // 1.2.2 policy dispatch entrypoint used by exec/source path
     switch (policy) {
@@ -215,46 +239,113 @@ void scheduler_set_first_process_pid(int pid) {
     g_force_first_pid_once = pid;
 }
 
-void scheduler_enable_multithreaded() {
-    mt_enabled = 1;
+void scheduler_set_multithreaded(int enabled) {
+    mt_enabled = enabled ? 1 : 0;
 }
 
-int scheduler_is_multithreaded() {
+int scheduler_is_multithreaded(void) {
     return mt_enabled;
 }
 
+int scheduler_is_worker_thread(void) {
+    pthread_t self;
+
+    if (!mt_workers_started) {
+        return 0;
+    }
+
+    self = pthread_self();
+    if (pthread_equal(self, worker_threads[0]) || pthread_equal(self, worker_threads[1])) {
+        return 1;
+    }
+    return 0;
+}
+
 void scheduler_join_workers() {
-    if (!mt_enabled) return;
+    if (!mt_workers_started) {
+        g_scheduler_active = 0;
+        return;
+    }
+
+    pthread_mutex_lock(&rq_mutex);
+    while (ready_queue_peek_head() != NULL || mt_active_workers > 0) {
+        pthread_cond_wait(&rq_cond, &rq_mutex);
+    }
     scheduler_quit = 1;
     pthread_cond_broadcast(&rq_cond);
+    pthread_mutex_unlock(&rq_mutex);
+
     pthread_join(worker_threads[0], NULL);
     pthread_join(worker_threads[1], NULL);
+
+    pthread_mutex_lock(&rq_mutex);
+    mt_workers_started = 0;
+    scheduler_quit = 0;
+    pthread_mutex_unlock(&rq_mutex);
+
+    g_scheduler_active = 0;
+}
+
+void scheduler_ready_queue_lock(void) {
+    pthread_mutex_lock(&rq_mutex);
+}
+
+void scheduler_ready_queue_unlock(void) {
+    pthread_mutex_unlock(&rq_mutex);
+}
+
+void scheduler_ready_queue_signal(void) {
+    pthread_cond_broadcast(&rq_cond);
 }
 
 // 1.2.6 Worker thread function for MT RR/RR30
 static void* scheduler_worker_thread(void* arg) {
-    int time_slice = *(int*)arg;
+    (void)arg;
+
     while (1) {
+        PCB *current = NULL;
+        int last_error = 0;
+
         pthread_mutex_lock(&rq_mutex);
         while (!scheduler_quit && ready_queue_peek_head() == NULL) {
             pthread_cond_wait(&rq_cond, &rq_mutex);
         }
-        if (scheduler_quit) {
+        if (scheduler_quit && ready_queue_peek_head() == NULL) {
             pthread_mutex_unlock(&rq_mutex);
             break;
         }
-        PCB *current = ready_queue_pop_head();
+
+        current = scheduler_pop_forced_first_if_any();
+        if (current == NULL) {
+            current = ready_queue_pop_head();
+        }
+        if (current != NULL) {
+            mt_active_workers++;
+        }
         pthread_mutex_unlock(&rq_mutex);
-        if (!current) continue;
-        run_process_slice(current, time_slice, 0);
+
+        if (!current) {
+            continue;
+        }
+
+        last_error = run_process_slice(current, mt_time_slice, 0);
+
         pthread_mutex_lock(&rq_mutex);
-        if (current->pc > current->end) {
+        if (last_error == -2) {
+            mem_cleanup_script(current->start, current->end);
+            free(current);
+            mt_active_workers--;
+            pthread_cond_broadcast(&rq_cond);
+            pthread_mutex_unlock(&rq_mutex);
+            break;
+        } else if (current->pc > current->end) {
             mem_cleanup_script(current->start, current->end);
             free(current);
         } else {
             ready_queue_add_to_tail(current);
-            pthread_cond_signal(&rq_cond);
         }
+        mt_active_workers--;
+        pthread_cond_broadcast(&rq_cond);
         pthread_mutex_unlock(&rq_mutex);
     }
     return NULL;

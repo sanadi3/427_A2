@@ -152,7 +152,7 @@ int interpreter(char *command_args[], int args_size) {
         return run(&command_args[1], args_size - 1);
 
     } else if (strcmp(command_args[0], "exec") == 0) {
-        if (args_size < 3 || args_size > 6)
+        if (args_size < 3 || args_size > 7)
             return badcommandExec();
         return exec_cmd(&command_args[1], args_size - 1);
 
@@ -226,6 +226,7 @@ int load_programs_into_ready_queue(char *scripts[], int script_count, SchedulePo
     int ends[3];
     PCB *pcbs[3] = { NULL, NULL, NULL };
     char line[MAX_USER_INPUT];
+    int use_mt_queue_lock = scheduler_is_active() && scheduler_is_multithreaded();
 
     for (int i = 0; i < script_count; i++) {
         starts[i] = -1;
@@ -289,6 +290,9 @@ int load_programs_into_ready_queue(char *scripts[], int script_count, SchedulePo
         }
     }
 
+    if (use_mt_queue_lock) {
+        scheduler_ready_queue_lock();
+    }
     for (int i = 0; i < script_count; i++) {
         if (policy == POLICY_AGING) {
             // 1.2.4 AGING starts with score-sorted queue
@@ -297,6 +301,10 @@ int load_programs_into_ready_queue(char *scripts[], int script_count, SchedulePo
             // 1.2.1/.2/.3/.5 FCFS/SJF/RR/RR30 initial enqueue order
             ready_queue_add_to_tail(pcbs[i]);
         }
+    }
+    if (use_mt_queue_lock) {
+        scheduler_ready_queue_signal();
+        scheduler_ready_queue_unlock();
     }
 
     return 0;
@@ -343,8 +351,15 @@ int load_batch_remainder_process(SchedulePolicy policy, int print_exec_load_erro
      * we now also tag this batch PID as "run first once" in scheduler.
      * that gives the batch process its guaranteed first time slice.
      */
+    if (scheduler_is_active() && scheduler_is_multithreaded()) {
+        scheduler_ready_queue_lock();
+    }
     ready_queue_add_to_head(batch_process);
     scheduler_set_first_process_pid(batch_process->pid);
+    if (scheduler_is_active() && scheduler_is_multithreaded()) {
+        scheduler_ready_queue_signal();
+        scheduler_ready_queue_unlock();
+    }
     (void)policy;
     return 0;
 }
@@ -359,14 +374,30 @@ int run_scheduler_if_needed(SchedulePolicy policy) {
 
 void cleanup_ready_queue_processes(void) {
     PCB *p = NULL;
+    int use_mt_queue_lock = scheduler_is_active() && scheduler_is_multithreaded();
+
+    if (use_mt_queue_lock) {
+        scheduler_ready_queue_lock();
+    }
     while ((p = ready_queue_pop_head()) != NULL) {
         mem_cleanup_script(p->start, p->end);
         free(p);
+    }
+    if (use_mt_queue_lock) {
+        scheduler_ready_queue_unlock();
     }
 }
 
 int quit() {
     printf("Bye!\n");
+
+    if (scheduler_is_multithreaded()) {
+        if (scheduler_is_worker_thread()) {
+            return -2;
+        }
+        scheduler_join_workers();
+    }
+
     exit(0);
 }
 
@@ -584,14 +615,20 @@ int source(char *script) {
 int exec_cmd(char *args[], int arg_size) {
     // 1.2.2 + 1.2.5 exec command handler
     int has_background = 0;
+    int has_multithread = 0;
     int policy_index = arg_size - 1;
     int script_count = 0;
     char *policy_text = NULL;
     SchedulePolicy policy;
 
-    if (arg_size >= 2 && strcmp(args[arg_size - 1], "#") == 0) {
+    if (policy_index >= 0 && strcmp(args[policy_index], "MT") == 0) {
+        has_multithread = 1;
+        policy_index--;
+    }
+
+    if (policy_index >= 0 && strcmp(args[policy_index], "#") == 0) {
         has_background = 1;
-        policy_index = arg_size - 2;
+        policy_index--;
     }
 
     if (policy_index < 1) {
@@ -606,6 +643,10 @@ int exec_cmd(char *args[], int arg_size) {
     }
 
     if (parse_policy(policy_text, &policy) != 0) {
+        return badcommandExecPolicy();
+    }
+
+    if (has_multithread && !(policy == POLICY_RR || policy == POLICY_RR30)) {
         return badcommandExecPolicy();
     }
 
@@ -625,6 +666,10 @@ int exec_cmd(char *args[], int arg_size) {
     // 1.2.5 assumption says background recursion keeps same policy
     if (scheduler_is_active()) {
         policy = scheduler_get_current_policy();
+        has_multithread = scheduler_is_multithreaded();
+    } else if (has_multithread) {
+        // 1.2.6: once MT is enabled in a testcase, it remains enabled.
+        scheduler_set_multithreaded(1);
     }
 
     if (load_programs_into_ready_queue(args, script_count, policy, 1) != 0) {
