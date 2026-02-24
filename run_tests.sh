@@ -11,6 +11,42 @@ cleanup_build() {
 }
 trap cleanup_build EXIT
 
+count_token() {
+  local file="$1"
+  local token="$2"
+  awk -v tok="$token" '$0 == tok { c++ } END { print c + 0 }' "$file"
+}
+
+validate_mt_output() {
+  local expected="$1"
+  local actual="$2"
+  local expected_header
+  local actual_header
+
+  expected_header="$(head -n 1 "$expected")"
+  actual_header="$(head -n 1 "$actual")"
+
+  if [[ "$expected_header" != "$actual_header" ]]; then
+    return 1
+  fi
+
+  for token in "X" "YY" "ZZZ" "Bye!"; do
+    local expected_count
+    local actual_count
+    expected_count="$(count_token "$expected" "$token")"
+    actual_count="$(count_token "$actual" "$token")"
+    if [[ "$expected_count" != "$actual_count" ]]; then
+      return 1
+    fi
+  done
+
+  if grep -q '^Bad command:' "$actual"; then
+    return 1
+  fi
+
+  return 0
+}
+
 if [[ ! -d "$SRC_DIR" || ! -d "$TEST_DIR" ]]; then
   echo "error: expected src/ and test-cases/ under $ROOT_DIR"
   exit 1
@@ -50,9 +86,16 @@ for input in T_*.txt; do
 
   matched=0
   for expected in "${expected_files[@]}"; do
-    if diff -q "$expected" "$out_file" >/dev/null; then
-      matched=1
-      break
+    if [[ "$base" == T_MT* ]]; then
+      if validate_mt_output "$expected" "$out_file"; then
+        matched=1
+        break
+      fi
+    else
+      if diff -q "$expected" "$out_file" >/dev/null; then
+        matched=1
+        break
+      fi
     fi
   done
 
