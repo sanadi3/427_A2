@@ -1,5 +1,8 @@
 #include <stdlib.h>
 #include <stdio.h>
+#include <pthread.h>
+#include <unistd.h>
+#include <errno.h>
 
 #include "scheduler.h"
 #include "shellmemory.h"
@@ -9,6 +12,13 @@
 static int g_scheduler_active = 0;
 static SchedulePolicy g_current_policy = POLICY_FCFS;
 static int g_force_first_pid_once = -1;
+
+// Multithreaded scheduler globals
+static int mt_enabled = 0;
+static pthread_t worker_threads[2];
+static pthread_mutex_t rq_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t rq_cond = PTHREAD_COND_INITIALIZER;
+static int scheduler_quit = 0;
 
 /*
  * 1.2.5 background-mode fix (for T_background):
@@ -127,9 +137,33 @@ static int scheduler_run_aging(void) {
     return last_error;
 }
 
+static int scheduler_run_mt_rr(int time_slice) {
+    int slice_arg[2] = {time_slice, time_slice};
+    scheduler_quit = 0;
+    pthread_create(&worker_threads[0], NULL, scheduler_worker_thread, &slice_arg[0]);
+    pthread_create(&worker_threads[1], NULL, scheduler_worker_thread, &slice_arg[1]);
+    // Wait for all jobs to finish
+    while (1) {
+        pthread_mutex_lock(&rq_mutex);
+        int empty = (ready_queue_peek_head() == NULL);
+        pthread_mutex_unlock(&rq_mutex);
+        if (empty) break;
+        usleep(10000); // sleep 10ms
+    }
+    scheduler_quit = 1;
+    pthread_cond_broadcast(&rq_cond);
+    pthread_join(worker_threads[0], NULL);
+    pthread_join(worker_threads[1], NULL);
+    return 0;
+}
+
 int scheduler_run(SchedulePolicy policy) {
     int rc = 1;
 
+    if (mt_enabled && (policy == POLICY_RR || policy == POLICY_RR30)) {
+        int slice = (policy == POLICY_RR) ? 2 : 30;
+        return scheduler_run_mt_rr(slice);
+    }
     // 1.2.5: avoid nested scheduler loops
     if (g_scheduler_active) {
         return 1;
@@ -173,4 +207,49 @@ SchedulePolicy scheduler_get_current_policy(void) {
 
 void scheduler_set_first_process_pid(int pid) {
     g_force_first_pid_once = pid;
+}
+
+void scheduler_enable_multithreaded() {
+    mt_enabled = 1;
+}
+
+int scheduler_is_multithreaded() {
+    return mt_enabled;
+}
+
+void scheduler_join_workers() {
+    if (!mt_enabled) return;
+    scheduler_quit = 1;
+    pthread_cond_broadcast(&rq_cond);
+    pthread_join(worker_threads[0], NULL);
+    pthread_join(worker_threads[1], NULL);
+}
+
+// 1.2.6 Worker thread function for MT RR/RR30
+static void* scheduler_worker_thread(void* arg) {
+    int time_slice = *(int*)arg;
+    while (1) {
+        pthread_mutex_lock(&rq_mutex);
+        while (!scheduler_quit && ready_queue_peek_head() == NULL) {
+            pthread_cond_wait(&rq_cond, &rq_mutex);
+        }
+        if (scheduler_quit) {
+            pthread_mutex_unlock(&rq_mutex);
+            break;
+        }
+        PCB *current = ready_queue_pop_head();
+        pthread_mutex_unlock(&rq_mutex);
+        if (!current) continue;
+        run_process_slice(current, time_slice, 0);
+        pthread_mutex_lock(&rq_mutex);
+        if (current->pc > current->end) {
+            mem_cleanup_script(current->start, current->end);
+            free(current);
+        } else {
+            ready_queue_add_to_tail(current);
+            pthread_cond_signal(&rq_cond);
+        }
+        pthread_mutex_unlock(&rq_mutex);
+    }
+    return NULL;
 }
