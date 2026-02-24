@@ -128,6 +128,30 @@ PCB* ready_queue_pop_shortest() {
     return min_node;
 }
 
+PCB* ready_queue_pop_pid(int pid) {
+    if (head == NULL) return NULL;
+
+    PCB *prev = NULL;
+    PCB *curr = head;
+    while (curr != NULL && curr->pid != pid) {
+        prev = curr;
+        curr = curr->next;
+    }
+    if (curr == NULL) return NULL;
+
+    if (prev == NULL) {
+        head = curr->next;
+    } else {
+        prev->next = curr->next;
+    }
+    if (tail == curr) {
+        tail = prev;
+    }
+
+    curr->next = NULL;
+    return curr;
+}
+
 // print queue for debugging
 void ready_queue_print() {
     PCB *curr = head;
