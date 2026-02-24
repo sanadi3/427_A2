@@ -27,6 +27,10 @@ static int scheduler_quit = 0;
  * So we keep one "forced first PID" and pop that process first exactly one time.
  * After that, scheduling goes back to normal FCFS/SJF/RR/RR30/AGING behavior.
  */
+static PCB* scheduler_pop_forced_first_if_any(void);
+// Forward declaration for worker thread function (1.2.6)
+static void* scheduler_worker_thread(void* arg);
+
 static PCB* scheduler_pop_forced_first_if_any(void) {
     PCB *forced = NULL;
     if (g_force_first_pid_once < 0) {
@@ -138,7 +142,9 @@ static int scheduler_run_aging(void) {
 }
 
 static int scheduler_run_mt_rr(int time_slice) {
-    int slice_arg[2] = {time_slice, time_slice};
+    static int slice_arg[2];
+    slice_arg[0] = time_slice;
+    slice_arg[1] = time_slice;
     scheduler_quit = 0;
     pthread_create(&worker_threads[0], NULL, scheduler_worker_thread, &slice_arg[0]);
     pthread_create(&worker_threads[1], NULL, scheduler_worker_thread, &slice_arg[1]);
