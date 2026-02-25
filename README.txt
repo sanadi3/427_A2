@@ -1,8 +1,8 @@
 Name: Sanad Abubaker
 McGill ID: 261143797
 
-Name: Nigel
-McGill ID: 
+Name: Nigel Yip
+McGill ID: 261308092
 
 
 Starter code usage:
