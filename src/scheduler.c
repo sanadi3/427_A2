@@ -19,6 +19,7 @@ static pthread_t worker_threads[2];
 static pthread_mutex_t rq_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t rq_cond = PTHREAD_COND_INITIALIZER;
 static int scheduler_quit = 0;
+static int active_jobs = 0;  // Count of jobs currently being executed
 
 /*
  * 1.2.5 background-mode fix (for T_background):
@@ -146,16 +147,20 @@ static int scheduler_run_mt_rr(int time_slice) {
     slice_arg[0] = time_slice;
     slice_arg[1] = time_slice;
     scheduler_quit = 0;
+    active_jobs = 0;
     pthread_create(&worker_threads[0], NULL, scheduler_worker_thread, &slice_arg[0]);
     pthread_create(&worker_threads[1], NULL, scheduler_worker_thread, &slice_arg[1]);
-    // Wait for all jobs to finish
+    
+    // Wait for queue to be empty AND all in-flight jobs to complete
     while (1) {
         pthread_mutex_lock(&rq_mutex);
-        int empty = (ready_queue_peek_head() == NULL);
+        int queue_empty = (ready_queue_peek_head() == NULL);
+        int all_done = (active_jobs == 0);
         pthread_mutex_unlock(&rq_mutex);
-        if (empty) break;
-        usleep(10000); // sleep 10ms
+        if (queue_empty && all_done) break;
+        usleep(1000); // sleep 1ms
     }
+    
     scheduler_quit = 1;
     pthread_cond_broadcast(&rq_cond);
     pthread_join(worker_threads[0], NULL);
@@ -219,6 +224,10 @@ void scheduler_enable_multithreaded() {
     mt_enabled = 1;
 }
 
+void scheduler_disable_multithreaded() {
+    mt_enabled = 0;
+}
+
 int scheduler_is_multithreaded() {
     return mt_enabled;
 }
@@ -244,16 +253,34 @@ static void* scheduler_worker_thread(void* arg) {
             break;
         }
         PCB *current = ready_queue_pop_head();
+        if (current) {
+            active_jobs++;  // Mark job as in-flight
+        }
         pthread_mutex_unlock(&rq_mutex);
+        
         if (!current) continue;
+        
         run_process_slice(current, time_slice, 0);
-        pthread_mutex_lock(&rq_mutex);
-        if (current->pc > current->end) {
+        
+        // Check if process is complete
+        int is_done = (current->pc > current->end);
+        
+        // Do cleanup OUTSIDE the critical section
+        if (is_done) {
             mem_cleanup_script(current->start, current->end);
             free(current);
+        }
+        
+        pthread_mutex_lock(&rq_mutex);
+        if (is_done) {
+            // Process finished - decrement counter and broadcast to wake main/other workers
+            active_jobs--;
+            pthread_cond_broadcast(&rq_cond);
         } else {
+            // Process not done - re-queue and wake other worker
             ready_queue_add_to_tail(current);
-            pthread_cond_signal(&rq_cond);
+            active_jobs--;
+            pthread_cond_broadcast(&rq_cond);
         }
         pthread_mutex_unlock(&rq_mutex);
     }
