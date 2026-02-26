@@ -1,13 +1,22 @@
 #include <stdio.h>
+#include <pthread.h>
 #include "ready_queue.h"
 
 // Global pointers to head and tail 
 PCB *head = NULL;
 PCB *tail = NULL;
 
+// Add a mutex for thread-safe operations
+static pthread_mutex_t rq_mutex = PTHREAD_MUTEX_INITIALIZER;
+
 // 1.2.1/1.2.2 FCFS path uses tail enqueue
 void ready_queue_add_to_tail(PCB *p) {
-    if (!p) return;
+    pthread_mutex_lock(&rq_mutex);
+    
+    if (!p) {
+        pthread_mutex_unlock(&rq_mutex);
+        return;
+    }
     p->next = NULL;
 
     if (head == NULL) {
@@ -17,11 +26,18 @@ void ready_queue_add_to_tail(PCB *p) {
         tail->next = p;
         tail = p;
     }
+    
+    pthread_mutex_unlock(&rq_mutex);
 }
 
 // 1.2.4 AGING can keep current process running by putting it back at head
 void ready_queue_add_to_head(PCB *p) {
-    if (!p) return;
+    pthread_mutex_lock(&rq_mutex);
+    
+    if (!p) {
+        pthread_mutex_unlock(&rq_mutex);
+        return;
+    }
 
     if (head == NULL) {
         head = p;
@@ -31,11 +47,18 @@ void ready_queue_add_to_head(PCB *p) {
         p->next = head;
         head = p;
     }
+    
+    pthread_mutex_unlock(&rq_mutex);
 }
 
 // shared dequeue for FCFS/RR/AGING
 PCB* ready_queue_pop_head() {
-    if (head == NULL) return NULL;
+    pthread_mutex_lock(&rq_mutex);
+    
+    if (head == NULL) {
+        pthread_mutex_unlock(&rq_mutex);
+        return NULL;
+    }
 
     PCB *temp = head;
     head = head->next;
@@ -46,17 +69,25 @@ PCB* ready_queue_pop_head() {
     }
     
     temp->next = NULL; // Isolate the popped PCB
+    
+    pthread_mutex_unlock(&rq_mutex);
     return temp;
 }
 
 void ready_queue_insert_sorted(PCB *p) {
+    pthread_mutex_lock(&rq_mutex);
+    
     // 1.2.4: keep AGING queue ordered by score (low score first)
-    if (!p) return;
+    if (!p) {
+        pthread_mutex_unlock(&rq_mutex);
+        return;
+    }
     p->next = NULL;
 
     if (head == NULL) {
         head = p;
         tail = p;
+        pthread_mutex_unlock(&rq_mutex);
         return;
     }
 
@@ -64,6 +95,7 @@ void ready_queue_insert_sorted(PCB *p) {
     if (p->job_length_score < head->job_length_score) {
         p->next = head;
         head = p;
+        pthread_mutex_unlock(&rq_mutex);
         return;
     }
 
@@ -77,9 +109,13 @@ void ready_queue_insert_sorted(PCB *p) {
     if (p->next == NULL) {
         tail = p;
     }
+    
+    pthread_mutex_unlock(&rq_mutex);
 }
 
 void ready_queue_age_all(void) {
+    pthread_mutex_lock(&rq_mutex);
+    
     // 1.2.4 aging step: waiting jobs only, score-- floor at 0
     PCB *curr = head;
     while (curr != NULL) {
@@ -88,17 +124,25 @@ void ready_queue_age_all(void) {
         }
         curr = curr->next;
     }
+    
+    pthread_mutex_unlock(&rq_mutex);
 }
 
 PCB* ready_queue_peek_head(void) {
-    // 1.2.4 check whether current still lowest/tied-lowest
-    return head;
+    pthread_mutex_lock(&rq_mutex);
+    PCB *result = head;
+    pthread_mutex_unlock(&rq_mutex);
+    return result;
 }
-
 
 // 1.2.3 SJF: pick lowest job_time
 PCB* ready_queue_pop_shortest() {
-    if (head == NULL) return NULL;
+    pthread_mutex_lock(&rq_mutex);
+    
+    if (head == NULL) {
+        pthread_mutex_unlock(&rq_mutex);
+        return NULL;
+    }
 
     PCB *prev = NULL;
     PCB *curr = head;
@@ -125,11 +169,18 @@ PCB* ready_queue_pop_shortest() {
     }
 
     min_node->next = NULL;
+    
+    pthread_mutex_unlock(&rq_mutex);
     return min_node;
 }
 
 PCB* ready_queue_pop_pid(int pid) {
-    if (head == NULL) return NULL;
+    pthread_mutex_lock(&rq_mutex);
+    
+    if (head == NULL) {
+        pthread_mutex_unlock(&rq_mutex);
+        return NULL;
+    }
 
     PCB *prev = NULL;
     PCB *curr = head;
@@ -137,7 +188,10 @@ PCB* ready_queue_pop_pid(int pid) {
         prev = curr;
         curr = curr->next;
     }
-    if (curr == NULL) return NULL;
+    if (curr == NULL) {
+        pthread_mutex_unlock(&rq_mutex);
+        return NULL;
+    }
 
     if (prev == NULL) {
         head = curr->next;
@@ -149,11 +203,23 @@ PCB* ready_queue_pop_pid(int pid) {
     }
 
     curr->next = NULL;
+    
+    pthread_mutex_unlock(&rq_mutex);
     return curr;
 }
 
-// print queue for debugging
+// Function for checking if queue is empty (thread-safe)
+int ready_queue_is_empty(void) {
+    pthread_mutex_lock(&rq_mutex);
+    int empty = (head == NULL);
+    pthread_mutex_unlock(&rq_mutex);
+    return empty;
+}
+
+// print queue for debugging (still needs mutex for safe printing)
 void ready_queue_print() {
+    pthread_mutex_lock(&rq_mutex);
+    
     PCB *curr = head;
     printf("Ready Queue: ");
     while (curr != NULL) {
@@ -161,4 +227,6 @@ void ready_queue_print() {
         curr = curr->next;
     }
     printf("NULL\n");
+    
+    pthread_mutex_unlock(&rq_mutex);
 }
