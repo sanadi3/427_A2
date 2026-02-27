@@ -2,11 +2,11 @@
 #include <pthread.h>
 #include "ready_queue.h"
 
-// Global pointers to head and tail 
+// Global pointers to head and tail of queue
 PCB *head = NULL;
 PCB *tail = NULL;
 
-// Add a mutex for thread-safe operations
+// mutex for thread-safe operations
 static pthread_mutex_t rq_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 // 1.2.1/1.2.2 FCFS path uses tail enqueue
@@ -19,10 +19,11 @@ void ready_queue_add_to_tail(PCB *p) {
     }
     p->next = NULL;
 
+    // Empty queue
     if (head == NULL) {
         head = p;
         tail = p;
-    } else {
+    } else { // Nonempty queue
         tail->next = p;
         tail = p;
     }
@@ -39,11 +40,12 @@ void ready_queue_add_to_head(PCB *p) {
         return;
     }
 
+    // Empty queue
     if (head == NULL) {
         head = p;
         tail = p;
         p->next = NULL;
-    } else {
+    } else { // Nonempty queue
         p->next = head;
         head = p;
     }
@@ -91,7 +93,7 @@ void ready_queue_insert_sorted(PCB *p) {
         return;
     }
 
-    // 1.2.4 tie behavior: stable for equal scores
+    // 1.2.4 if tie, then stable for equal scores
     if (p->job_length_score < head->job_length_score) {
         p->next = head;
         head = p;
@@ -99,11 +101,13 @@ void ready_queue_insert_sorted(PCB *p) {
         return;
     }
 
+    // Find correct position in sorted list
     PCB *curr = head;
     while (curr->next != NULL && curr->next->job_length_score <= p->job_length_score) {
         curr = curr->next;
     }
 
+    // Insert after curr
     p->next = curr->next;
     curr->next = p;
     if (p->next == NULL) {
@@ -113,6 +117,7 @@ void ready_queue_insert_sorted(PCB *p) {
     pthread_mutex_unlock(&rq_mutex);
 }
 
+// Decrease scores of all waiting processes (AGING)
 void ready_queue_age_all(void) {
     pthread_mutex_lock(&rq_mutex);
     
@@ -149,6 +154,7 @@ PCB* ready_queue_pop_shortest() {
     PCB *min_prev = NULL;
     PCB *min_node = head;
 
+    // Find minimum
     while (curr != NULL) {
         if (curr->job_time < min_node->job_time) {
             min_node = curr;
@@ -158,6 +164,7 @@ PCB* ready_queue_pop_shortest() {
         curr = curr->next;
     }
 
+    // Remove min_node from queue
     if (min_prev == NULL) {
         head = min_node->next;
     } else {
@@ -174,9 +181,11 @@ PCB* ready_queue_pop_shortest() {
     return min_node;
 }
 
+// Remove PCB with specific PID
 PCB* ready_queue_pop_pid(int pid) {
     pthread_mutex_lock(&rq_mutex);
     
+    // Find node with matching PID
     if (head == NULL) {
         pthread_mutex_unlock(&rq_mutex);
         return NULL;
@@ -188,6 +197,8 @@ PCB* ready_queue_pop_pid(int pid) {
         prev = curr;
         curr = curr->next;
     }
+
+    // PID not found
     if (curr == NULL) {
         pthread_mutex_unlock(&rq_mutex);
         return NULL;
@@ -216,7 +227,7 @@ int ready_queue_is_empty(void) {
     return empty;
 }
 
-// print queue for debugging (still needs mutex for safe printing)
+// print queue for debugging
 void ready_queue_print() {
     pthread_mutex_lock(&rq_mutex);
     
