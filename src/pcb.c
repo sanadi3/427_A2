@@ -16,7 +16,7 @@ PCB* make_pcb(int start, int end) {
     new_pcb->end = end;
     new_pcb->pc = start; // 1.2.1 program counter
     new_pcb->job_time = (end - start+1); // 1.2.3 SJF uses line count as job length
-    new_pcb->job_length_score = new_pcb->job_time; // 1.2.4 AGING score starts = job length
+    new_pcb->job_length_score = new_pcb->job_time; // (NOT in the video) 1.2.4 AGING score starts = job length
     new_pcb->next = NULL; // Initialize next pointer to NULL
     return new_pcb;
 }
