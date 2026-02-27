@@ -10,7 +10,7 @@ struct memory_struct {
 
 struct memory_struct shellmemory[MEM_SIZE];
 
-// 1.2.1: separate code storage, not mixed with VAR memory
+// For script storage
 struct code_struct{
     char *line;
 };
@@ -18,8 +18,7 @@ struct code_struct shell_code[MEM_SIZE];
 
 int code_idx = 0;
 
-int mem_load_script_line(char *line) {
-    // 1.2.1/1.2.2: code loader used by source/exec
+int mem_load_script_line(char *line) {  
     if (code_idx < MEM_SIZE) {
         shell_code[code_idx].line = strdup(line);
         return code_idx++; // Return current index and increment
@@ -32,8 +31,7 @@ char *mem_get_line(int index) {
     return NULL;
 }
 
-void mem_cleanup_script(int start, int end) {
-    // 1.2.1 cleanup requirement
+void mem_cleanup_script(int start, int end) {  // Free memory used by a script from start to end
     for (int i = start; i <= end && i < MEM_SIZE; i++) {
         if (shell_code[i].line != NULL) {
             free(shell_code[i].line);
@@ -65,7 +63,6 @@ void mem_init(void) {
     for (i = 0; i < MEM_SIZE; i++) {
         shellmemory[i].var = "none";
         shellmemory[i].value = "none";
-        // 1.2.1: init code memory too
         shell_code[i].line = NULL;
     }
     code_idx = 0;
