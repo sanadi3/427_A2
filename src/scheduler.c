@@ -9,9 +9,9 @@
 #include "ready_queue.h"
 #include "shell.h"
 
-static int g_scheduler_active = 0;
+static int g_scheduler_active = 0;  // Prevents nested scheduler runs
 static SchedulePolicy g_current_policy = POLICY_FCFS;
-static int g_force_first_pid_once = -1;
+static int g_force_first_pid_once = -1;  // PID to run first (background mode)
 
 // Multithreaded scheduler globals
 static int mt_enabled = 0;
@@ -59,11 +59,13 @@ static int run_process_slice(PCB *current, int max_instructions, int last_error)
     return last_error;
 }
 
+// FCFS scheduler
 static int scheduler_run_fcfs(void) {
     // 1.2.1 base scheduler behavior. 1.2.2 exec FCFS also lands here
     int last_error = 0;
     PCB *current = NULL;
 
+    // Get next process
     while ((current = scheduler_pop_forced_first_if_any()) != NULL
            || (current = ready_queue_pop_head()) != NULL) {
         last_error = run_process_slice(current, -1, last_error);
@@ -75,7 +77,7 @@ static int scheduler_run_fcfs(void) {
     return last_error;
 }
 
-// 1.2.3: SJF sched. Always pick the process with the shortest job time (instructions)
+// 1.2.3: SJF scheduler
 static int scheduler_run_sjf(void) {
     int last_error = 0;
     PCB *current = NULL;
@@ -117,6 +119,7 @@ static int scheduler_run_aging(void) {
     PCB *current = NULL;
     const int aging_quantum = 1;
 
+    // Get next process
     while ((current = scheduler_pop_forced_first_if_any()) != NULL
            || (current = ready_queue_pop_head()) != NULL) {
         last_error = run_process_slice(current, aging_quantum, last_error);
@@ -148,6 +151,8 @@ static int scheduler_run_mt_rr(int time_slice) {
     slice_arg[1] = time_slice;
     scheduler_quit = 0;
     active_jobs = 0;
+
+    // Create two worker threads
     pthread_create(&worker_threads[0], NULL, scheduler_worker_thread, &slice_arg[0]);
     pthread_create(&worker_threads[1], NULL, scheduler_worker_thread, &slice_arg[1]);
     
@@ -161,8 +166,8 @@ static int scheduler_run_mt_rr(int time_slice) {
         usleep(1000); // sleep 1ms
     }
     
-    scheduler_quit = 1;
-    pthread_cond_broadcast(&rq_cond);
+    scheduler_quit = 1;  // Signal threads to quit
+    pthread_cond_broadcast(&rq_cond);  // Wake any waiting threads
     pthread_join(worker_threads[0], NULL);
     pthread_join(worker_threads[1], NULL);
     return 0;
