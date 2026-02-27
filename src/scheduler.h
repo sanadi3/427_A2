@@ -10,6 +10,8 @@ typedef enum {
 } SchedulePolicy;
 
 int scheduler_run(SchedulePolicy policy);
+int scheduler_run_background(SchedulePolicy policy);
+int scheduler_is_active(void);
 
 // Enable/disable multithreaded mode
 void scheduler_enable_multithreaded();
