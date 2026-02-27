@@ -65,10 +65,7 @@ int badcommandExecPolicy();
 int badcommandExecDuplicate();
 int badcommandExecLoad();
 int parse_policy(char *policy_text, SchedulePolicy *out_policy);
-int load_programs_into_ready_queue(char *scripts[], int script_count, SchedulePolicy policy, int print_exec_load_error);
-int load_batch_remainder_process(SchedulePolicy policy, int print_exec_load_error);
-int run_scheduler_if_needed(SchedulePolicy policy);
-void cleanup_ready_queue_processes(void);
+int load_and_schedule_programs(char *scripts[], int script_count, SchedulePolicy policy, int print_exec_load_error, int background_mode);
 
 // Interpret commands and their arguments
 int interpreter(char *command_args[], int args_size) {
@@ -169,7 +166,7 @@ quit			Exits / terminates the shell with “Bye!”\n \
 set VAR STRING		Assigns a value to shell memory\n \
 print VAR		Displays the STRING assigned to VAR\n \
 source SCRIPT.TXT		Executes the file SCRIPT.TXT\n \
-exec p1 [p2] [p3] POLICY [#]	Executes up to 3 programs\n ";
+exec p1 [p2] [p3] POLICY	Executes up to 3 programs\n ";
     printf("%s\n", help_string);
     return 0;
 }
@@ -195,7 +192,7 @@ int badcommandExecLoad() {
 }
 
 int parse_policy(char *policy_text, SchedulePolicy *out_policy) {
-    // 1.2.2 parse exec POLICY token (FCFS/SJF/RR/AGING)
+    // A2 1.2.2: Parse user policy tokens exactly as specified by the assignment.
     if (strcmp(policy_text, "FCFS") == 0) {
         *out_policy = POLICY_FCFS;
         return 0;
@@ -208,20 +205,20 @@ int parse_policy(char *policy_text, SchedulePolicy *out_policy) {
         *out_policy = POLICY_RR;
         return 0;
     }
-    if (strcmp(policy_text, "RR30") == 0) {
-        *out_policy = POLICY_RR30;
-        return 0;
-    }
     if (strcmp(policy_text, "AGING") == 0) {
         *out_policy = POLICY_AGING;
+        return 0;
+    }
+    if (strcmp(policy_text, "RR30") == 0) {
+        *out_policy = POLICY_RR30;
         return 0;
     }
     return 1;
 }
 
-int load_programs_into_ready_queue(char *scripts[], int script_count, SchedulePolicy policy, int print_exec_load_error) {
-    // 1.2.1 + 1.2.2:
-    // load full scripts + create PCBs + enqueue, but do not run scheduler here
+int load_and_schedule_programs(char *scripts[], int script_count, SchedulePolicy policy, int print_exec_load_error, int background_mode) {
+    // A2 1.2.2: Shared load/validation path used by both source and exec.
+    // This keeps code loading, PCB creation, and queue setup policy-agnostic.
     int starts[3];
     int ends[3];
     PCB *pcbs[3] = { NULL, NULL, NULL };
@@ -235,7 +232,6 @@ int load_programs_into_ready_queue(char *scripts[], int script_count, SchedulePo
     for (int i = 0; i < script_count; i++) {
         FILE *p = fopen(scripts[i], "rt");
         if (p == NULL) {
-            // 1.2.2 load failure => no program should run
             for (int j = 0; j < i; j++) {
                 mem_cleanup_script(starts[j], ends[j]);
             }
@@ -248,7 +244,6 @@ int load_programs_into_ready_queue(char *scripts[], int script_count, SchedulePo
         while (fgets(line, MAX_USER_INPUT - 1, p) != NULL) {
             int idx = mem_load_script_line(line);
             if (idx < 0) {
-                // 1.2.2 atomic failure behavior
                 fclose(p);
                 if (starts[i] >= 0) {
                     mem_cleanup_script(starts[i], ends[i]);
@@ -289,84 +284,36 @@ int load_programs_into_ready_queue(char *scripts[], int script_count, SchedulePo
         }
     }
 
+    // For AGING policy, use sorted insertion to order processes by job length
+    // For other policies, use FIFO (add to tail)
     for (int i = 0; i < script_count; i++) {
         if (policy == POLICY_AGING) {
-            // 1.2.4 AGING starts with score-sorted queue
             ready_queue_insert_sorted(pcbs[i]);
         } else {
-            // 1.2.1/.2/.3/.5 FCFS/SJF/RR/RR30 initial enqueue order
             ready_queue_add_to_tail(pcbs[i]);
         }
     }
 
-    return 0;
-}
-
-int load_batch_remainder_process(SchedulePolicy policy, int print_exec_load_error) {
-    // 1.2.5: turn remaining batch input into prog0 and enqueue it
-    char line[MAX_USER_INPUT];
-    int start = -1;
-    int end = -1;
-
-    while (fgets(line, MAX_USER_INPUT - 1, stdin) != NULL) {
-        int idx = mem_load_script_line(line);
-        if (idx < 0) {
-            if (start >= 0) {
-                mem_cleanup_script(start, end);
-            }
-            if (print_exec_load_error) {
-                return badcommandExecLoad();
-            }
-            return 1;
-        }
-        if (start < 0) start = idx;
-        end = idx;
+    // In background mode, use non-blocking scheduler
+    if (background_mode) {
+        return scheduler_run_background(policy);
     }
 
-    if (start < 0) {
-        return 0;
-    }
-
-    PCB *batch_process = make_pcb(start, end);
-    if (batch_process == NULL) {
-        mem_cleanup_script(start, end);
-        if (print_exec_load_error) {
-            return badcommandExecLoad();
-        }
-        return 1;
-    }
-
-    // 1.2.5: batch process gets first turn once
-    /*
-     * 1.2.5 background-mode fix (for T_background):
-     * queue head alone was not enough for SJF because SJF chooses by shortest job.
-     * we now also tag this batch PID as "run first once" in scheduler.
-     * that gives the batch process its guaranteed first time slice.
-     */
-    ready_queue_add_to_head(batch_process);
-    scheduler_set_first_process_pid(batch_process->pid);
-    (void)policy;
-    return 0;
-}
-
-int run_scheduler_if_needed(SchedulePolicy policy) {
-    // 1.2.5: if scheduler already running (exec called from batch process), just enqueue and return
-    if (scheduler_is_active()) {
-        return 0;
-    }
     return scheduler_run(policy);
-}
-
-void cleanup_ready_queue_processes(void) {
-    PCB *p = NULL;
-    while ((p = ready_queue_pop_head()) != NULL) {
-        mem_cleanup_script(p->start, p->end);
-        free(p);
-    }
 }
 
 int quit() {
     printf("Bye!\n");
+    
+    // For background mode, we need to wait for threads to finish
+    // The scheduler_quit flag will be set when all jobs are done
+    if (scheduler_is_multithreaded()) {
+        // Give threads time to finish
+        while (scheduler_is_active()) {
+            usleep(10000);  // Wait 10ms
+        }
+        scheduler_join_workers();
+    }
     exit(0);
 }
 
@@ -565,7 +512,8 @@ int cd(char *path) {
 }
 
 int source(char *script) {
-    // 1.2.1 source now runs as a process through scheduler path
+    // A2 1.2.1 + 1.2.2: source runs through the same process loader/scheduler path
+    // as exec with one program and FCFS.
     FILE *p = fopen(script, "rt");
     char *scripts[1];
 
@@ -575,31 +523,30 @@ int source(char *script) {
     fclose(p);
 
     scripts[0] = script;
-    if (load_programs_into_ready_queue(scripts, 1, POLICY_FCFS, 0) != 0) {
-        return 1;
-    }
-    return run_scheduler_if_needed(POLICY_FCFS);
+    return load_and_schedule_programs(scripts, 1, POLICY_FCFS, 0, 0);
 }
 
 int exec_cmd(char *args[], int arg_size) {
-    // 1.2.2 + 1.2.5 exec command handler
-    int has_background = 0;
-    int policy_index = arg_size - 1;
-    int script_count = 0;
-    char *policy_text = NULL;
+    // Detect background mode (#) and MT option - they can be in any order at the end
+    int background_mode = 0;
+    int mt_detected = 0;
+    
+    // Strip both # and MT flags from the end, in any order
+    while (arg_size > 0) {
+        if (strcmp(args[arg_size-1], "MT") == 0) {
+            mt_detected = 1;
+            arg_size--;
+        } else if (strcmp(args[arg_size-1], "#") == 0) {
+            background_mode = 1;
+            arg_size--;
+        } else {
+            break;
+        }
+    }
+    
+    int script_count = arg_size - 1;
+    char *policy_text = args[arg_size - 1];
     SchedulePolicy policy;
-
-    if (arg_size >= 2 && strcmp(args[arg_size - 1], "#") == 0) {
-        has_background = 1;
-        policy_index = arg_size - 2;
-    }
-
-    if (policy_index < 1) {
-        return badcommandExec();
-    }
-
-    script_count = policy_index;
-    policy_text = args[policy_index];
 
     if (script_count < 1 || script_count > 3) {
         return badcommandExec();
@@ -617,28 +564,14 @@ int exec_cmd(char *args[], int arg_size) {
         }
     }
 
-    if (has_background && scheduler_is_active()) {
-        // no nested background mode inside a currently running scheduler
-        return badcommandExec();
+    // Enable MT only if flag is present in THIS exec
+    if (mt_detected) {
+        scheduler_enable_multithreaded();
+    } else {
+        scheduler_disable_multithreaded();
     }
 
-    // 1.2.5 assumption says background recursion keeps same policy
-    if (scheduler_is_active()) {
-        policy = scheduler_get_current_policy();
-    }
-
-    if (load_programs_into_ready_queue(args, script_count, policy, 1) != 0) {
-        return 1;
-    }
-
-    if (has_background) {
-        if (load_batch_remainder_process(policy, 1) != 0) {
-            cleanup_ready_queue_processes();
-            return 1;
-        }
-    }
-
-    return run_scheduler_if_needed(policy);
+    return load_and_schedule_programs(args, script_count, policy, 1, background_mode);
 }
 
 int run(char *args[], int arg_size) {
