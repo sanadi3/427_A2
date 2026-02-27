@@ -37,6 +37,7 @@ static pthread_mutex_t bg_mutex = PTHREAD_MUTEX_INITIALIZER;
 static PCB* scheduler_pop_forced_first_if_any(void);
 // Forward declaration for 1.2.6
 static void* scheduler_worker_thread(void* arg);
+static int run_process_slice(PCB *current, int max_instructions, int last_error);
 
 static int scheduler_run_fcfs(void) {
     // 1.2.1 base scheduler behavior. 1.2.2 exec FCFS also lands here
