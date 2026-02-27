@@ -31,6 +31,7 @@ char *mem_get_line(int index) {
     return NULL;
 }
 
+// Free memory used by a script from start to end
 void mem_cleanup_script(int start, int end) {
     for (int i = start; i <= end && i < MEM_SIZE; i++) {
         if (shell_code[i].line != NULL) {
